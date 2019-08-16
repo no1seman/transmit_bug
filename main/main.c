@@ -102,30 +102,53 @@ char *array2hex(const uint8_t *hex, char *target, uint8_t len, bool capital)
     return (target);
 }
 
+esp_err_t http_get_hdr_value(httpd_req_t *req, char *key, char **value)
+{
+    size_t value_len = httpd_req_get_hdr_value_len(req, key);
+    if (value_len > 1)
+    {
+        *value = pvPortMalloc(value_len + 1);
+        httpd_req_get_hdr_value_str(req, key, (char *)*value, value_len + 1);
+
+        ESP_LOGD(TAG, "Request has key: '%s' - value: '%s'", key, *value);
+        return ESP_OK;
+    }
+    return ESP_FAIL;
+}
+
 esp_err_t get_static_file(static_file_t static_file, httpd_req_t *req)
 {
     esp_err_t res;
-    uint32_t start_time = esp_log_timestamp();
-    ESP_LOGI(TAG, "Get static file: %s", static_files_cache[static_file].filename);
-    if (static_files_cache[static_file].buf)
+    char *buf = NULL;
+    if (http_get_hdr_value(req, "Accept-Encoding", &buf) == ESP_OK)
     {
-        if (static_files_cache[static_file].gzipped)
-            httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
-        httpd_resp_set_type(req, res_types[static_files_cache[static_file].resptype].uri_type);
-        httpd_resp_set_status(req, HTTPD_200);
-        unsigned char md5[16];
-        char md5hex[34];
-        mbedtls_md5_ret((const unsigned char *)static_files_cache[static_file].buf, static_files_cache[static_file].len, md5);
-        httpd_resp_set_hdr(req, "MD5HASH", array2hex((const uint8_t *)&md5, (char *)&md5hex, 16, false));
-        res = httpd_resp_send(req, static_files_cache[static_file].buf, static_files_cache[static_file].len);
-        uint32_t end_time = esp_log_timestamp();
-        if (res == ESP_OK)
-            ESP_LOGI(TAG, "Sending file '%s' took %u ms", static_files_cache[static_file].filename, end_time - start_time);
-        else
-            ESP_LOGI(TAG, "Sending file '%s' failed", static_files_cache[static_file].filename);
-        return res;
+        if (strstr(buf, "gzip"))
+        {
+            uint32_t start_time = esp_log_timestamp();
+            ESP_LOGI(TAG, "Get static file: %s", static_files_cache[static_file].filename);
+            if (static_files_cache[static_file].buf)
+            {
+                if (static_files_cache[static_file].gzipped)
+                    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+                httpd_resp_set_type(req, res_types[static_files_cache[static_file].resptype].uri_type);
+                httpd_resp_set_status(req, HTTPD_200);
+                unsigned char md5[16];
+                char md5hex[34];
+                mbedtls_md5_ret((const unsigned char *)static_files_cache[static_file].buf, static_files_cache[static_file].len, md5);
+                httpd_resp_set_hdr(req, "MD5HASH", array2hex((const uint8_t *)&md5, (char *)&md5hex, 16, false));
+                res = httpd_resp_send(req, static_files_cache[static_file].buf, static_files_cache[static_file].len);
+                uint32_t end_time = esp_log_timestamp();
+                if (res == ESP_OK)
+                    ESP_LOGI(TAG, "Sending file '%s' took %u ms", static_files_cache[static_file].filename, end_time - start_time);
+                else
+                    ESP_LOGI(TAG, "Sending file '%s' failed", static_files_cache[static_file].filename);
+                return res;
+            }
+            res = httpd_resp_send_404(req);
+            return res;
+        }
     }
-    res = httpd_resp_send_404(req);
+    res = httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Server supports only gzipped responds. Try another browser");
     return res;
 }
 
